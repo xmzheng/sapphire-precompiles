@@ -1,0 +1,71 @@
+import { ethers } from "hardhat";
+
+import * as sapphire from '@oasisprotocol/sapphire-paratime'
+
+import { arrayify, hexlify } from '@ethersproject/bytes'
+import deoxysii from 'deoxysii';
+import { sha512_256 } from 'js-sha512';
+import nacl, { BoxKeyPair } from 'tweetnacl';
+
+async function main() {
+  const currentTimestampInSeconds = Math.round(Date.now() / 1000);
+  const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
+  const unlockTime = currentTimestampInSeconds + ONE_YEAR_IN_SECS;
+
+  const lockedAmount = ethers.utils.parseEther("1");
+  const [owner] = await ethers.getSigners();
+  const Lock = await ethers.getContractFactory("Lock", sapphire.wrap(owner));
+  const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
+
+  await lock.deployed();
+
+  console.log(`Lock with 1 ETH and unlock timestamp ${unlockTime} deployed to ${lock.address}`);
+
+//  const peerPrivateKey = await lock.getPrivateKey();
+//  console.log("peerPrivateKey : ", peerPrivateKey);
+
+  console.log('Waiting...');
+  await new Promise((resolve) => setTimeout(resolve, 7_000));
+
+  const peerPrivateKey = await lock.getPrivateKey();
+  console.log("peerPrivateKey : ", peerPrivateKey);
+              
+  const peerPublicKey = await lock.getPublicKey();
+  console.log("peerPublicKey : ", peerPublicKey);
+
+  const keypair = nacl.box.keyPair();
+  const publicKey = hexlify(keypair.publicKey);
+  console.log("selfPublicKey : ", publicKey);
+  const keyBytes = sha512_256.hmac
+    .create('MRAE_Box_Deoxys-II-256-128')
+    .update(nacl.scalarMult(keypair.secretKey, arrayify(peerPublicKey)))
+    .arrayBuffer();
+
+  const privateKey = new Uint8Array(keyBytes);
+  const cipher = new deoxysii.AEAD(new Uint8Array(privateKey));
+
+  const encodedData = "0x02472b1e711cbe50b5aa02eea78e7881ce0a0fa0fb6b17795d534863450008bc";
+
+  console.log("encodedData: ", encodedData);
+  
+  const nonceStr = hexlify(nacl.randomBytes(deoxysii.NonceSize)) + "0000000000000000000000000000000000";
+
+  console.log("nonceStr: ", nonceStr);
+  
+  const nonce = arrayify(nonceStr);
+  
+  const encrpytedData = hexlify(cipher.encrypt(nonce.slice(0, 15), arrayify(encodedData)));
+
+  console.log("encrpytedText: ", encrpytedData);
+
+  await lock.decrpyt(encrpytedData, publicKey, nonceStr);
+
+  
+}
+
+// We recommend this pattern to be able to use async/await everywhere
+// and properly handle errors.
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
